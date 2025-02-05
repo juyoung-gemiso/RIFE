@@ -11,6 +11,7 @@ from tqdm import tqdm
 import warnings
 from utils import *
 from ffmpeg_utils import *
+from interpolate_options import InterpolateOptions
 
 warnings.filterwarnings("ignore")
 
@@ -51,45 +52,45 @@ class RIFE:
         else:
             return [*first_half, *second_half]
     
-    def interpolate(self, one_second_frames, write_buffer, interval, padding, exp, scale, deleted_one_frame_or_not, delete_frame_flag, output_dir, pbar, input_fps_2x, interpolated_total_frame_count, size, save_img):
-        h, w = size
+    def interpolate(self, one_second_frames, write_buffer, pbar, interpolate_options:InterpolateOptions):
+        h, w = interpolate_options.size
         interpolated_frame_count = 0
         original_frame_start_index = 0
-        for inserted_index in range(interval, len(one_second_frames), interval):
-            left_frame = self._get_padding_image(one_second_frames[inserted_index - 1], padding)
-            right_frame = self._get_padding_image(one_second_frames[inserted_index], padding)
-            output = self.make_inference(left_frame, right_frame, exp, scale)
-            if deleted_one_frame_or_not:
+        for inserted_index in range(interpolate_options.interval, len(one_second_frames), interpolate_options.interval):
+            left_frame = self._get_padding_image(one_second_frames[inserted_index - 1], interpolate_options.padding)
+            right_frame = self._get_padding_image(one_second_frames[inserted_index], interpolate_options.padding)
+            output = self.make_inference(left_frame, right_frame, interpolate_options.exp, interpolate_options.scale)
+            if interpolate_options.deleted_one_frame_or_not:
                 if delete_frame_flag:
-                    exp -= 1
+                    interpolate_options.exp -= 1
                 else:
-                    exp += 1
+                    interpolate_options.exp += 1
                 delete_frame_flag = not delete_frame_flag
             # insert original frames
             for original_frame_index in range(original_frame_start_index, inserted_index):
                 img = one_second_frames[original_frame_index][:, :, ::-1]
-                if save_img:
+                if interpolate_options.save_img:
                     pil_img = Image.fromarray(img, mode='RGB')
-                    pil_img.save(f"{output_dir}/{self.idx:06d}.tga")
+                    pil_img.save(f"{interpolate_options.output_dir}/{self.idx:06d}.tga")
                     self.idx += 1
                 write_buffer.put(img)
-                interpolated_total_frame_count += 1
+                interpolate_options.interpolated_total_frame_count += 1
             original_frame_start_index = inserted_index
             # insert interpolated frames
             for mid in output:
                 mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
                 mid = np.ascontiguousarray(mid[:h, :w])[:, :, ::-1]
-                if save_img:
+                if interpolate_options.save_img:
                     pil_img = Image.fromarray(mid, mode='RGB')
-                    pil_img.save(f"{output_dir}/{self.idx:06d}_interpolated.tga")
+                    pil_img.save(f"{interpolate_options.output_dir}/{self.idx:06d}_interpolated.tga")
                     self.idx += 1
                 write_buffer.put(mid)
-                interpolated_total_frame_count += 1
+                interpolate_options.interpolated_total_frame_count += 1
                 if self.debug: interpolated_frame_count += 1
         if self.debug: print(f"interpolated_frames count: {interpolated_frame_count}")
 
-        pbar.update(round(input_fps_2x))
-        return one_second_frames[inserted_index:], interpolated_total_frame_count
+        pbar.update(round(interpolate_options.input_fps_2x))
+        return one_second_frames[inserted_index:], interpolate_options.interpolated_total_frame_count
 
     def run(self, video:str, extension:str, output_fps:float, bitrate, scale:float=1.0, save_img:bool=False):
         if self.debug:
@@ -144,9 +145,20 @@ class RIFE:
 
         # -- interpolate extracted progressive frames using RIFE
         one_second_frames = [lastframe] # length = origin fps + 1
-        interpolated_total_frame_count = 0
         original_total_frame_count = 1
-        delete_frame_flag = False
+        interpolate_options = InterpolateOptions(
+            interval=interval, 
+            padding=padding, 
+            exp=exp,
+            scale=scale, 
+            deleted_one_frame_or_not=deleted_one_frame_or_not, 
+            delete_frame_flag=False, 
+            output_dir=output_dir, 
+            input_fps_2x=input_fps_2x, 
+            interpolated_total_frame_count=0,
+            size=(h, w),
+            save_img=save_img
+        )
 
         while True:
             if len(one_second_frames) <= round(input_fps_2x):
@@ -156,18 +168,8 @@ class RIFE:
                         one_second_frames, interpolated_total_frame_count = self.interpolate(
                             one_second_frames, 
                             write_buffer,
-                            interval, 
-                            padding, 
-                            exp,
-                            scale, 
-                            deleted_one_frame_or_not, 
-                            delete_frame_flag, 
-                            output_dir, 
                             pbar, 
-                            input_fps_2x, 
-                            interpolated_total_frame_count,
-                            (h, w),
-                            save_img
+                            interpolate_options
                         )               
                     break
                 one_second_frames.append(frame)
@@ -179,18 +181,8 @@ class RIFE:
             one_second_frames, interpolated_total_frame_count = self.interpolate(
                 one_second_frames, 
                 write_buffer,
-                interval, 
-                padding, 
-                exp, 
-                scale, 
-                deleted_one_frame_or_not, 
-                delete_frame_flag, 
-                output_dir, 
                 pbar, 
-                input_fps_2x, 
-                interpolated_total_frame_count,
-                (h, w),
-                save_img
+                interpolate_options
             )
 
         if one_second_frames:
@@ -200,7 +192,7 @@ class RIFE:
                     pil_img.save(f"{output_dir}/{self.idx:06d}.tga")
                     self.idx += 1
                 write_buffer.put(frame[:, :, ::-1])
-                interpolated_total_frame_count += 1
+                interpolate_options.interpolated_total_frame_count += 1
 
         if self.debug:
             print(f"\ninterpolated_total_frame_count: {interpolated_total_frame_count}")
