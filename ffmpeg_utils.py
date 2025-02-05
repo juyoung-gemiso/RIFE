@@ -21,7 +21,7 @@ def extract_audio(sourceVideo):
     assert os.path.exists(tempAudioFileName), "not exist audio file. maybe it didn't extracted audio."
     return tempAudioFileName
 
-def transferAudio(sourceVideo, targetVideo, fps:float, bitrate:str, output_ext:str, audio_stream_count:int):
+def transferAudio(sourceVideo, targetVideo, fps:float, output_ext:str, audio_stream_count:int):
     tempAudioFileName = extract_audio(sourceVideo)
     base_path, ext =  os.path.splitext(sourceVideo)
     targetNoAudio = os.path.splitext(targetVideo)[0] + "_noaudio" + os.path.splitext(targetVideo)[1]
@@ -60,6 +60,7 @@ def transferAudio(sourceVideo, targetVideo, fps:float, bitrate:str, output_ext:s
     # remove temp directory
     shutil.rmtree("temp")
 
+@DeprecationWarning
 def transferAudioWithFrames(sourceVideo:str, targetFrames:str, fps:float, bitrate:str, output_ext:str):
     tempAudioFileName = extract_audio(sourceVideo)
     base_path, ext =  os.path.splitext(sourceVideo)

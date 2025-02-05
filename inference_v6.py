@@ -92,7 +92,7 @@ class RIFE:
         pbar.update(round(interpolate_options.input_fps_2x))
         return one_second_frames[inserted_index:], interpolate_options.interpolated_total_frame_count
 
-    def run(self, video:str, extension:str, output_fps:float, bitrate, scale:float=1.0, save_img:bool=False):
+    def run(self, video:str, extension:str, output_fps:float, scale:float=1.0, save_img:bool=False):
         if self.debug:
             start_time = time.time()
 
@@ -138,7 +138,7 @@ class RIFE:
         padding = (0, pw - w, 0, ph - h)
         pbar = tqdm(total=total_frames)
 
-        output_video_name, video_container, video_stream = get_video_writer_using_av(video, round(args.fps) * 2, (h, w), args.ext)
+        output_video_name, video_container, video_stream = get_video_writer_using_av(video, round(output_fps) * 2, (h, w), extension)
 
         # -- generate buffer
         read_buffer, write_buffer = generate_buffer(frames, video_container, video_stream, (h, w))
@@ -213,7 +213,7 @@ class RIFE:
                 video_container.mux(packet)
             video_container.close()
             
-        transferAudio(video, output_video_name, output_fps, bitrate, extension, audio_stream_count)
+        transferAudio(video, output_video_name, output_fps, extension, audio_stream_count)
 
         if self.debug:
             end_time = time.time()
@@ -233,11 +233,10 @@ if __name__ == '__main__':
     parser.add_argument('--video', dest='video', type=str, default=None)
     parser.add_argument('--output_base_path', dest='output_base_path', type=str, default=None)
     parser.add_argument('--fps', dest='fps', type=float, default=None)
-    parser.add_argument('--bitrate', dest='bitrate', type=str, default=None, help="e.g. 60M")
     parser.add_argument('--ext', dest='ext', type=str, default='mp4', help='vid_out video extension')
     parser.add_argument('--save_img', dest='save_img', action='store_true', help='save image or not')
     parser.add_argument('--debug', dest='debug', action='store_true', help='whether debug or not')
     args = parser.parse_args()
     
     rife = RIFE(model_dir="train_log", output_base_path=args.output_base_path, debug=args.debug)
-    rife.run(args.video, args.ext, args.fps, args.bitrate, scale=0.25, save_img=args.save_img)
+    rife.run(args.video, args.ext, args.fps, scale=0.25, save_img=args.save_img)
