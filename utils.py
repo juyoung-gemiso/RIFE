@@ -1,6 +1,10 @@
 import os
+import av
 import cv2
-import multiprocessing as mp
+import _thread
+import numpy as np
+from PIL import Image
+from queue import Queue
 from torch.nn import functional as F
 
 
@@ -42,57 +46,55 @@ def get_video_writer(video_path, extension, fps, size):
     vid_out_name = '{}_{}fps.{}'.format(video_path_wo_ext, fps, extension)
     return vid_out_name, cv2.VideoWriter(vid_out_name, fourcc, fps, (w, h))
 
-def transferAudio(sourceVideo, targetVideo, fps, bitrate):
-    import shutil
-    tempAudioFileName = "./temp/audio.mkv"
+def get_video_writer_using_av(video_path, fps, size, extension="mp4"):
+    video_path_wo_ext, _ = os.path.splitext(video_path)
+    h, w = size
+    output_video_name = '{}_{}fps.{}'.format(video_path_wo_ext, fps, extension)
+    container = av.open(output_video_name, mode="w")
+    stream = container.add_stream(
+        codec_name="mpeg2video", 
+        rate=fps, 
+        options={
+            'maxrate': '50M', 
+            'minrate': '50M', 
+            'bufsize': '36M',
+        }
+    )
+    stream.width = w
+    stream.height = h
+    stream.pix_fmt = "yuv420p"
+    stream.bit_rate = 50_000_000
+    stream.gop_size = 15
 
-    # split audio from original video file and store in "temp" directory
-    if True:
+    return output_video_name, container, stream
 
-        # clear old "temp" directory if it exits
-        if os.path.isdir("temp"):
-            # remove temp directory
-            shutil.rmtree("temp")
-        # create new "temp" directory
-        os.makedirs("temp")
-        # extract audio from video
-        os.system('ffmpeg -y -i "{}" -c:a copy -vn {}'.format(sourceVideo, tempAudioFileName))
+def read_image(path:str):
+    return cv2.cvtColor(np.array(Image.open(path)), cv2.COLOR_BGR2RGB)
 
-    targetNoAudio = os.path.splitext(targetVideo)[0] + "_noaudio" + os.path.splitext(targetVideo)[1]
-    os.rename(targetVideo, targetNoAudio)
+def clear_write_buffer(write_buffer:Queue, video_container:av.container.OutputContainer, video_stream:av.VideoStream, size:tuple[int, int]):
+    height, width = 0, 1
+    while True:
+        item = np.ascontiguousarray(write_buffer.get())
+        if item is None:
+            break
+        frame = av.VideoFrame.from_ndarray(np.frombuffer(item, dtype=np.uint8).reshape(size[height], size[width], 3), format="rgb24")
+        for packet in video_stream.encode(frame):
+            video_container.mux(packet)
 
-    num_threads = mp.cpu_count() // 2
-    # combine audio file and new video file (*.mp4)
-    if os.path.exists(tempAudioFileName):
-        if fps == 29.97:
-            os.system('ffmpeg -y -i "{}" -i {} -c:v libx264 -b:v {} -r 29.97 -c:a aac -ar 48000 -b:a 160k -async 1 -shortest -threads {} "{}"'.format(targetNoAudio, tempAudioFileName, bitrate, num_threads, targetVideo))
-        elif fps == 59.94:
-            os.system('ffmpeg -y -i "{}" -i {} -c:v libx264 -b:v {} -r 59.94 -c:a aac -ar 48000 -b:a 160k -async 1 -shortest -threads {} "{}"'.format(targetNoAudio, tempAudioFileName, bitrate, num_threads, targetVideo))
-        else:
-            os.system('ffmpeg -y -i "{}" -i {} -c:v libx264 -b:v {} -r {}" -c:a aac -ar 48000 -b:a 160k -async 1 -shortest -threads {} "{}"'.format(targetNoAudio, tempAudioFileName, bitrate, fps, num_threads, targetVideo))
-    else:
-        print("This video can't extract audio...")
-        if fps == 29.97:
-            os.system('ffmpeg -y -i "{}" -c:v libx264 -b:v {} -filter:v "fps=fps=30000/1001" -threads {} "{}"'.format(targetNoAudio, bitrate, num_threads, targetVideo))
-        elif fps == 59.94:
-            os.system('ffmpeg -y -i "{}" -c:v libx264 -b:v {} -filter:v "fps=fps=60000/1001" -threads {} "{}"'.format(targetNoAudio, bitrate, num_threads, targetVideo))
-        else:
-            os.system('ffmpeg -y -i "{}" -c:v libx264 -b:v {} -filter:v "fps=fps={}" -threads {} "{}"'.format(targetNoAudio, bitrate, fps, num_threads, targetVideo))
+def build_read_buffer(read_buffer, videoCapture):
+    try:
+        while True:
+            read_buffer.put(read_image(videoCapture.pop(0)))
+    except:
+        pass
+    read_buffer.put(None)
+    
+def generate_buffer(frames:list[str], video_container:av.container.OutputContainer=None, video_stream:av.VideoStream=None, size:tuple[int, int]=None):
+    read_buffer = Queue(maxsize=500)
+    _thread.start_new_thread(build_read_buffer, ((read_buffer, frames)))
+    write_buffer = Queue(maxsize=500)
+    _thread.start_new_thread(clear_write_buffer, (write_buffer, video_container, video_stream, size))
+    return read_buffer, write_buffer
 
-    if os.path.getsize(targetVideo) == 0: # if ffmpeg failed to merge the video and audio together try converting the audio to aac
-        tempAudioFileName = "./temp/audio.m4a"
-        os.system('ffmpeg -y -i "{}" -c:a aac -b:a 160k -vn {}'.format(sourceVideo, tempAudioFileName))
-        os.system('ffmpeg -y -i "{}" -i {} -c copy "{}"'.format(targetNoAudio, tempAudioFileName, targetVideo))
-        if (os.path.getsize(targetVideo) == 0): # if aac is not supported by selected format
-            os.rename(targetNoAudio, targetVideo)
-            print("Audio transfer failed. Interpolated video will have no audio")
-        else:
-            print("Lossless audio transfer failed. Audio was transcoded to AAC (M4A) instead.")
-
-            # remove audio-less video
-            os.remove(targetNoAudio)
-    else:
-        os.remove(targetNoAudio)
-
-    # remove temp directory
-    shutil.rmtree("temp")
+def frame2image(frame):
+    return cv2.cvtColor(frame.to_rgb().to_ndarray(), cv2.COLOR_RGB2BGR)

@@ -195,4 +195,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     rife = RIFE(model_dir="train_log", debug=args.debug, save_img=args.save_img)
-    rife.run(args.video, args.ext, args.fps, args.bitrate, scale=0.25)
+    rife.run(args.video, args.ext, args.fps, args.bitrate, scale=0.5)

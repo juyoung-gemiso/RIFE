@@ -9,10 +9,8 @@ from PIL import Image
 from tqdm import tqdm
 
 import warnings
-import _thread
 from utils import *
 from ffmpeg_utils import *
-from queue import Queue
 
 warnings.filterwarnings("ignore")
 
@@ -53,7 +51,7 @@ class RIFE:
         else:
             return [*first_half, *second_half]
     
-    def interpolate(self, one_second_frames, interval, padding, exp, scale, deleted_one_frame_or_not, delete_frame_flag, output_dir, pbar, input_fps_2x, interpolated_total_frame_count, size):
+    def interpolate(self, one_second_frames, write_buffer, interval, padding, exp, scale, deleted_one_frame_or_not, delete_frame_flag, output_dir, pbar, input_fps_2x, interpolated_total_frame_count, size, save_img):
         h, w = size
         interpolated_frame_count = 0
         original_frame_start_index = 0
@@ -69,17 +67,23 @@ class RIFE:
                 delete_frame_flag = not delete_frame_flag
             # insert original frames
             for original_frame_index in range(original_frame_start_index, inserted_index):
-                pil_img = Image.fromarray(one_second_frames[original_frame_index][:, :, ::-1], mode='RGB')
-                pil_img.save(f"{output_dir}/{self.idx:06d}.tga")
-                self.idx += 1
+                img = one_second_frames[original_frame_index][:, :, ::-1]
+                if save_img:
+                    pil_img = Image.fromarray(img, mode='RGB')
+                    pil_img.save(f"{output_dir}/{self.idx:06d}.tga")
+                    self.idx += 1
+                write_buffer.put(img)
                 interpolated_total_frame_count += 1
             original_frame_start_index = inserted_index
             # insert interpolated frames
             for mid in output:
                 mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
-                pil_img = Image.fromarray(np.ascontiguousarray(mid[:h, :w])[:, :, ::-1], mode='RGB')
-                pil_img.save(f"{output_dir}/{self.idx:06d}.tga")
-                self.idx += 1
+                mid = np.ascontiguousarray(mid[:h, :w])[:, :, ::-1]
+                if save_img:
+                    pil_img = Image.fromarray(mid, mode='RGB')
+                    pil_img.save(f"{output_dir}/{self.idx:06d}_interpolated.tga")
+                    self.idx += 1
+                write_buffer.put(mid)
                 interpolated_total_frame_count += 1
                 if self.debug: interpolated_frame_count += 1
         if self.debug: print(f"interpolated_frames count: {interpolated_frame_count}")
@@ -87,7 +91,7 @@ class RIFE:
         pbar.update(round(input_fps_2x))
         return one_second_frames[inserted_index:], interpolated_total_frame_count
 
-    def run(self, video:str, extension:str, output_fps:float, bitrate, scale:float=1.0):
+    def run(self, video:str, extension:str, output_fps:float, bitrate, scale:float=1.0, save_img:bool=False):
         if self.debug:
             start_time = time.time()
 
@@ -96,16 +100,19 @@ class RIFE:
         input_fps = videoCapture.get(cv2.CAP_PROP_FPS)
         input_fps_2x = input_fps * 2
         videoCapture.release()
-        first_frame = next(av.open(video).decode(video=0))
-        if first_frame.interlaced_frame:
+        container = av.open(video)
+        audio_stream_count = sum(1 for stream in container.streams if stream.type == 'audio')
+        lastframe = next(container.decode(video=0))
+        if lastframe.interlaced_frame:
             # -- extract progressive frames from interlaced video using ffmpeg
             frames_dir = interlaced_to_progressive_2x(video, self.output_base_path, self.debug)
-            frames = os.listdir(frames_dir)
+            frames = list(map(lambda x: os.path.join(frames_dir, x), os.listdir(frames_dir)))
             output_dir = frames_dir + "_interpolated"
         else:
-            base_path, ext = os.path.splitext(os.path.basename(video))
-            output_dir = os.path.join(self.output_base_path, base_path + "_interpolated")
-            input_fps_2x = input_fps
+            # base_path, ext = os.path.splitext(os.path.basename(video))
+            # output_dir = os.path.join(self.output_base_path, base_path + "_interpolated")
+            # input_fps_2x = input_fps
+            print("=> not supported progressvie video yet.")
         os.makedirs(output_dir, exist_ok=True)
         if self.debug:
             end_time = time.time()
@@ -130,9 +137,10 @@ class RIFE:
         padding = (0, pw - w, 0, ph - h)
         pbar = tqdm(total=total_frames)
 
+        output_video_name, video_container, video_stream = get_video_writer_using_av(video, round(args.fps) * 2, (h, w), args.ext)
+
         # -- generate buffer
-        read_buffer = Queue(maxsize=500)
-        _thread.start_new_thread(self.build_read_buffer, (read_buffer, frames, frames_dir))
+        read_buffer, write_buffer = generate_buffer(frames, video_container, video_stream, (h, w))
 
         # -- interpolate extracted progressive frames using RIFE
         one_second_frames = [lastframe] # length = origin fps + 1
@@ -147,6 +155,7 @@ class RIFE:
                     if one_second_frames:
                         one_second_frames, interpolated_total_frame_count = self.interpolate(
                             one_second_frames, 
+                            write_buffer,
                             interval, 
                             padding, 
                             exp,
@@ -157,7 +166,8 @@ class RIFE:
                             pbar, 
                             input_fps_2x, 
                             interpolated_total_frame_count,
-                            (h, w)
+                            (h, w),
+                            save_img
                         )               
                     break
                 one_second_frames.append(frame)
@@ -168,6 +178,7 @@ class RIFE:
                 print("=> interpolation")
             one_second_frames, interpolated_total_frame_count = self.interpolate(
                 one_second_frames, 
+                write_buffer,
                 interval, 
                 padding, 
                 exp, 
@@ -178,14 +189,17 @@ class RIFE:
                 pbar, 
                 input_fps_2x, 
                 interpolated_total_frame_count,
-                (h, w)
+                (h, w),
+                save_img
             )
 
         if one_second_frames:
             for frame in one_second_frames:
-                pil_img = Image.fromarray(frame, mode='RGB')
-                pil_img.save(f"{output_dir}/{self.idx:06d}.tga")
-                self.idx += 1
+                if save_img:
+                    pil_img = Image.fromarray(frame, mode='RGB')
+                    pil_img.save(f"{output_dir}/{self.idx:06d}.tga")
+                    self.idx += 1
+                write_buffer.put(frame[:, :, ::-1])
                 interpolated_total_frame_count += 1
 
         if self.debug:
@@ -198,7 +212,16 @@ class RIFE:
             print(f"=> interpolation time: {end_time - start_time}s")
             start_time = time.time()
 
-        transferAudioWithFrames(video, output_dir, output_fps, bitrate, extension)
+        write_buffer.put(None)
+        while(not write_buffer.empty()):
+            time.sleep(0.1)
+
+        if video_container is not None:
+            for packet in video_stream.encode():
+                video_container.mux(packet)
+            video_container.close()
+            
+        transferAudio(video, output_video_name, output_fps, bitrate, extension, audio_stream_count)
 
         if self.debug:
             end_time = time.time()
@@ -212,7 +235,7 @@ if __name__ == '__main__':
     r"""
     Example Command Line:
 
-        > python inference_v5.py --video=Z:\\AI_workspace\\video_interpolation_backup\\soccer_25fps_1m30s.mxf --output_base_path=Z:\\AI_workspace\\video_interpolation_backup --fps=29.97 --bitrate=60M --ext=mxf
+        > python inference_v6.py --video=Z:\\AI_workspace\\video_interpolation_backup\\soccer_25fps_1m30s.mxf --output_base_path=Z:\\AI_workspace\\video_interpolation_backup --fps=29.97 --bitrate=50M --ext=mxf
     """
     parser = argparse.ArgumentParser(description='Interpolation for a pair of images')
     parser.add_argument('--video', dest='video', type=str, default=None)
@@ -220,8 +243,9 @@ if __name__ == '__main__':
     parser.add_argument('--fps', dest='fps', type=float, default=None)
     parser.add_argument('--bitrate', dest='bitrate', type=str, default=None, help="e.g. 60M")
     parser.add_argument('--ext', dest='ext', type=str, default='mp4', help='vid_out video extension')
+    parser.add_argument('--save_img', dest='save_img', action='store_true', help='save image or not')
     parser.add_argument('--debug', dest='debug', action='store_true', help='whether debug or not')
     args = parser.parse_args()
     
     rife = RIFE(model_dir="train_log", output_base_path=args.output_base_path, debug=args.debug)
-    rife.run(args.video, args.ext, args.fps, args.bitrate, scale=0.25)
+    rife.run(args.video, args.ext, args.fps, args.bitrate, scale=0.25, save_img=args.save_img)
