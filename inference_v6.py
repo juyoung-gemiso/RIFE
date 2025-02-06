@@ -52,6 +52,14 @@ class RIFE:
         else:
             return [*first_half, *second_half]
     
+    def _update_flag_and_exp(self, interpolate_options:InterpolateOptions):
+        if interpolate_options.deleted_one_frame_or_not:
+            if interpolate_options.delete_frame_flag:
+                interpolate_options.exp -= 1
+            else:
+                interpolate_options.exp += 1
+            interpolate_options.delete_frame_flag = not interpolate_options.delete_frame_flag
+
     def interpolate(self, one_second_frames, write_buffer, pbar, interpolate_options:InterpolateOptions):
         h, w = interpolate_options.size
         interpolated_frame_count = 0
@@ -60,33 +68,29 @@ class RIFE:
             left_frame = self._get_padding_image(one_second_frames[inserted_index - 1], interpolate_options.padding)
             right_frame = self._get_padding_image(one_second_frames[inserted_index], interpolate_options.padding)
             output = self.make_inference(left_frame, right_frame, interpolate_options.exp, interpolate_options.scale)
-            if interpolate_options.deleted_one_frame_or_not:
-                if delete_frame_flag:
-                    interpolate_options.exp -= 1
-                else:
-                    interpolate_options.exp += 1
-                delete_frame_flag = not delete_frame_flag
+            self._update_flag_and_exp(interpolate_options)
+
             # insert original frames
             for original_frame_index in range(original_frame_start_index, inserted_index):
                 img = one_second_frames[original_frame_index][:, :, ::-1]
                 if interpolate_options.save_img:
-                    pil_img = Image.fromarray(img, mode='RGB')
-                    pil_img.save(f"{interpolate_options.output_dir}/{self.idx:06d}.tga")
+                    save_image(img, f"{interpolate_options.output_dir}/{self.idx:06d}.tga")
                     self.idx += 1
                 write_buffer.put(img)
                 interpolate_options.interpolated_total_frame_count += 1
             original_frame_start_index = inserted_index
+
             # insert interpolated frames
             for mid in output:
                 mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
                 mid = np.ascontiguousarray(mid[:h, :w])[:, :, ::-1]
                 if interpolate_options.save_img:
-                    pil_img = Image.fromarray(mid, mode='RGB')
-                    pil_img.save(f"{interpolate_options.output_dir}/{self.idx:06d}_interpolated.tga")
+                    save_image(mid, f"{interpolate_options.output_dir}/{self.idx:06d}_interpolated.tga")
                     self.idx += 1
                 write_buffer.put(mid)
                 interpolate_options.interpolated_total_frame_count += 1
                 if self.debug: interpolated_frame_count += 1
+    
         if self.debug: print(f"interpolated_frames count: {interpolated_frame_count}")
 
         pbar.update(round(interpolate_options.input_fps_2x))

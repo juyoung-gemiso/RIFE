@@ -38,7 +38,7 @@ def transferAudio(sourceVideo, targetVideo, fps:float, output_ext:str, audio_str
             '-vcodec mpeg2video',
             '-s 1920x1080',
             f'-b:v 50M -minrate 50M -maxrate 50M',
-            '-bufsize 36M',
+            '-bufsize 100M',
             f'-r {fps}',
             '-timecode "00:00:00;00"',
             '-g 15',

@@ -11,6 +11,9 @@ from torch.nn import functional as F
 def pad_image(img, padding):
     return F.pad(img, padding)
 
+def save_image(img:np.array, save_path:str):
+    Image.fromarray(img, mode='RGB').save(save_path)
+
 def load_model(model_dir:str):
     try:
         try:
