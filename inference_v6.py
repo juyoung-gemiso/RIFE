@@ -127,7 +127,7 @@ class RIFE:
             deleted_one_frame_or_not = True # e.g. 2, 1, 2, 1, ...
         total_frames = len(frames)
         if self.debug: print(f"original fps: {input_fps_2x}, total frames: {total_frames}")
-        lastframe = read_image(os.path.join(frames_dir, frames.pop(0)))
+        lastframe = read_image(frames.pop(0))
         h, w, _ = lastframe.shape
         assert int((output_fps * 2) // input_fps_2x) > 0, 'You can\'t drop frames!! You must be input to fps greater than original fps!'
 
@@ -227,7 +227,7 @@ if __name__ == '__main__':
     r"""
     Example Command Line:
 
-        > python inference_v6.py --video=Z:\\AI_workspace\\video_interpolation_backup\\soccer_25fps_1m30s.mxf --output_base_path=Z:\\AI_workspace\\video_interpolation_backup --fps=29.97 --bitrate=50M --ext=mxf
+        > python inference_v6.py --video=Z:\\AI_workspace\\video_interpolation_backup\\soccer_25fps_1m30s.mxf --output_base_path=Z:\\AI_workspace\\video_interpolation_backup --fps=29.97 --ext=mxf
     """
     parser = argparse.ArgumentParser(description='Interpolation for a pair of images')
     parser.add_argument('--video', dest='video', type=str, default=None)
