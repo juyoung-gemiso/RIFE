@@ -110,7 +110,7 @@ class RIFE:
         lastframe = next(container.decode(video=0))
         if lastframe.interlaced_frame:
             # -- extract progressive frames from interlaced video using ffmpeg
-            frames_dir = interlaced_to_progressive_2x(video, self.output_base_path, self.debug)
+            frames_dir = interlaced_to_progressive_2x_frames(video, self.output_base_path, self.debug)
             frames = list(map(lambda x: os.path.join(frames_dir, x), os.listdir(frames_dir)))
             output_dir = frames_dir + "_interpolated"
         else:

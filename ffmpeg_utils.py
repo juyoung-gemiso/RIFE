@@ -38,7 +38,7 @@ def transferAudio(sourceVideo, targetVideo, fps:float, output_ext:str, audio_str
             '-vcodec mpeg2video',
             '-s 1920x1080',
             f'-b:v 50M -minrate 50M -maxrate 50M',
-            '-bufsize 100M',
+            '-bufsize 36M',
             f'-r {fps}',
             '-timecode "00:00:00;00"',
             '-g 15',
@@ -107,7 +107,7 @@ def transferAudioWithFrames(sourceVideo:str, targetFrames:str, fps:float, bitrat
     shutil.rmtree("temp")
 
 
-def interlaced_to_progressive_2x(video_path:str, output_base_path:str, debug:bool=False) -> str:
+def interlaced_to_progressive_2x_frames(video_path:str, output_base_path:str, debug:bool=False) -> str:
     base_path, ext = os.path.splitext(os.path.basename(video_path))
     output_frames_path = os.path.join(output_base_path, base_path + "_p_2x")
     if os.path.exists(output_frames_path):
