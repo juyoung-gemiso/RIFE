@@ -1,12 +1,12 @@
 import os
 import av
+import gc
 import time
 import math
 import torch
 import argparse
 import numpy as np
-from PIL import Image
-from tqdm import tqdm
+import multiprocessing as mp
 
 import warnings
 from utils import *
@@ -60,7 +60,7 @@ class RIFE:
                 interpolate_options.exp += 1
             interpolate_options.delete_frame_flag = not interpolate_options.delete_frame_flag
 
-    def interpolate(self, one_second_frames, write_buffer, pbar, interpolate_options:InterpolateOptions):
+    def interpolate(self, one_second_frames, video_container, video_stream, interpolate_options:InterpolateOptions):
         h, w = interpolate_options.size
         interpolated_frame_count = 0
         original_frame_start_index = 0
@@ -76,7 +76,7 @@ class RIFE:
                 if interpolate_options.save_img:
                     save_image(img, f"{interpolate_options.output_dir}/{self.idx:06d}.tga")
                     self.idx += 1
-                write_buffer.put(img)
+                write_frame_with_av(img, video_container, video_stream, interpolate_options.size)
                 interpolate_options.interpolated_total_frame_count += 1
             original_frame_start_index = inserted_index
 
@@ -87,13 +87,12 @@ class RIFE:
                 if interpolate_options.save_img:
                     save_image(mid, f"{interpolate_options.output_dir}/{self.idx:06d}_interpolated.tga")
                     self.idx += 1
-                write_buffer.put(mid)
+                write_frame_with_av(img, video_container, video_stream, interpolate_options.size)
                 interpolate_options.interpolated_total_frame_count += 1
                 if self.debug: interpolated_frame_count += 1
     
         if self.debug: print(f"interpolated_frames count: {interpolated_frame_count}")
 
-        pbar.update(round(interpolate_options.input_fps_2x))
         return one_second_frames[inserted_index:]
 
     def run(self, video:str, extension:str, output_fps:float, scale:float=1.0, save_img:bool=False):
@@ -102,54 +101,56 @@ class RIFE:
 
         # -- get metadata
         videoCapture = cv2.VideoCapture(video)
-        input_fps = videoCapture.get(cv2.CAP_PROP_FPS)
+        input_fps = videoCapture.get(cv2.CAP_PROP_FPS) # 원본 영상의 fps
+        total_frames = int(videoCapture.get(cv2.CAP_PROP_FRAME_COUNT)) * 2 # 원본 영상의 total_frames x 2 (e.g. 25i -> 50p)
         input_fps_2x = input_fps * 2
         videoCapture.release()
         container = av.open(video)
-        audio_stream_count = sum(1 for stream in container.streams if stream.type == 'audio')
-        lastframe = next(container.decode(video=0))
+        audio_stream_count = sum(1 for stream in container.streams if stream.type == 'audio') # 원본 영상의 오디오 스트림 개수
+        lastframe = next(container.decode(video=0)) # 원본 영상의 첫 번째 프레임
+        # 인터레이스 영상일 경우 프레임 추출 수행
         if lastframe.interlaced_frame:
             # -- extract progressive frames from interlaced video using ffmpeg
-            frames_dir = interlaced_to_progressive_2x_frames(video, self.output_base_path, self.debug)
-            frames = list(map(lambda x: os.path.join(frames_dir, x), os.listdir(frames_dir)))
-            output_dir = frames_dir + "_interpolated"
+            frames_dir = get_output_frames_path(video, self.output_base_path)
+            ffmpeg_process = mp.Process(target=interlaced_to_progressive_2x_frames, args=(video, frames_dir, self.debug,))
+            ffmpeg_process.start()
         else:
-            # base_path, ext = os.path.splitext(os.path.basename(video))
-            # output_dir = os.path.join(self.output_base_path, base_path + "_interpolated")
-            # input_fps_2x = input_fps
             print("=> not supported progressvie video yet.")
-        os.makedirs(output_dir, exist_ok=True)
+            return
         if self.debug:
             end_time = time.time()
             print(f"=> extract progressive frames time: {end_time - start_time}s")
             start_time = time.time()
 
+        # -- calculate inserted interval
         interval = max(1, int(input_fps_2x // (round(output_fps * 2) - round(input_fps_2x))))
         exp = math.floor((output_fps * 2) / input_fps_2x)
         deleted_one_frame_or_not = False # e.g. 1, 1, 1, 1, ...
         if (output_fps * 2) % input_fps_2x != 0 and exp > 1:
             deleted_one_frame_or_not = True # e.g. 2, 1, 2, 1, ...
-        total_frames = len(frames)
         if self.debug: print(f"original fps: {input_fps_2x}, total frames: {total_frames}")
-        lastframe = read_image(frames.pop(0))
+
+        # -- get frame size
+        lastframe = None
+        while lastframe is None:
+            if os.listdir(frames_dir):
+                lastframe = read_image(os.path.join(frames_dir, os.listdir(frames_dir)[0]))
+                break
         h, w, _ = lastframe.shape
         assert int((output_fps * 2) // input_fps_2x) > 0, 'You can\'t drop frames!! You must be input to fps greater than original fps!'
 
+        # -- calculate padding
         tmp = max(32, int(32 / scale))
         ph = ((h - 1) // tmp + 1) * tmp
         pw = ((w - 1) // tmp + 1) * tmp
         if self.debug: print(f"Padding Height: {ph}, Padding Width: {pw}")
         padding = (0, pw - w, 0, ph - h)
-        pbar = tqdm(total=total_frames)
 
+        # -- get video writer
         output_video_name, video_container, video_stream = get_video_writer_using_av(video, round(output_fps) * 2, (h, w), extension)
 
-        # -- generate buffer
-        read_buffer, write_buffer = generate_buffer(frames, video_container, video_stream, (h, w))
-
         # -- interpolate extracted progressive frames using RIFE
-        one_second_frames = [lastframe] # length = origin fps + 1
-        original_total_frame_count = 1
+        original_total_frame_count = 0
         interpolate_options = InterpolateOptions(
             interval=interval, 
             padding=padding, 
@@ -157,60 +158,65 @@ class RIFE:
             scale=scale, 
             deleted_one_frame_or_not=deleted_one_frame_or_not, 
             delete_frame_flag=False, 
-            output_dir=output_dir, 
+            output_dir='', 
             input_fps_2x=input_fps_2x, 
             interpolated_total_frame_count=0,
             size=(h, w),
             save_img=save_img
         )
 
+        # -- extracted frame start index(end index = start index + input_fps_2x + 1)
+        start_index = 0
+        end_index = int(start_index + round(input_fps_2x))
+
         while True:
-            if len(one_second_frames) <= round(input_fps_2x):
-                frame = read_buffer.get()
-                if frame is None:
-                    if one_second_frames:
-                        one_second_frames = self.interpolate(
-                            one_second_frames, 
-                            write_buffer,
-                            pbar, 
-                            interpolate_options
-                        )               
-                    break
-                one_second_frames.append(frame)
-                original_total_frame_count += 1
-                continue
-            if self.debug: 
-                print(f"\none_second_frames count: {len(one_second_frames)}")
-                print("=> interpolation")
-            one_second_frames = self.interpolate(
-                one_second_frames, 
-                write_buffer,
-                pbar, 
-                interpolate_options
-            )
+            if (os.path.exists(os.path.join(frames_dir, f"{start_index:06d}.tga")) \
+                and os.path.exists(os.path.join(frames_dir, f"{end_index:06d}.tga"))) \
+                    or total_frames - start_index <= round(input_fps_2x):
+
+                    if self.debug: print(f"{start_index:06d}.tga ~ {end_index:06d}.tga")
+                    # 남은 프레임이 fps보다 적을 경우
+                    if total_frames - start_index <= round(input_fps_2x):
+                        end_index = total_frames - 1
+                        ffmpeg_process.join()
+                    
+                    one_second_frames = []
+                    for i in range(start_index, end_index + 1):
+                        one_second_frames.append(read_image(os.path.join(frames_dir, f"{i:06d}.tga")))
+                        original_total_frame_count += 1
+
+                    if self.debug: 
+                        print(f"\none_second_frames count: {len(one_second_frames)}")
+                        print("=> interpolation")
+
+                    one_second_frames = self.interpolate(
+                        one_second_frames,
+                        video_container,
+                        video_stream,
+                        interpolate_options
+                    )
+
+                    # 보간 처리한 프레임 삭제
+                    remove_image_process = mp.Process(target=remove_images, args=(frames_dir, start_index, end_index,))
+                    remove_image_process.start()
+
+                    if end_index == total_frames - 1: break
+                    start_index = end_index
+                    end_index = int(start_index + round(input_fps_2x))
 
         if one_second_frames:
             for frame in one_second_frames:
-                if save_img:
-                    pil_img = Image.fromarray(frame, mode='RGB')
-                    pil_img.save(f"{output_dir}/{self.idx:06d}.tga")
-                    self.idx += 1
-                write_buffer.put(frame[:, :, ::-1])
+                write_frame_with_av(frame[:, :, ::-1], video_container, video_stream, interpolate_options.size)
                 interpolate_options.interpolated_total_frame_count += 1
-
+                
         if self.debug:
             print(f"\ninterpolated_total_frame_count: {interpolate_options.interpolated_total_frame_count}")
             print(f"original_total_frame_count: {original_total_frame_count}")
-        pbar.close()
 
         if self.debug:
             end_time = time.time()
             print(f"=> interpolation time: {end_time - start_time}s")
             start_time = time.time()
-
-        write_buffer.put(None)
-        while(not write_buffer.empty()):
-            time.sleep(0.1)
 
         if video_container is not None:
             for packet in video_stream.encode():
@@ -225,13 +231,12 @@ class RIFE:
         self.idx = 0
 
         shutil.rmtree(frames_dir)
-        shutil.rmtree(output_dir)
 
 if __name__ == '__main__':
     r"""
     Example Command Line:
 
-        > python inference_v6.py --video=Z:\\AI_workspace\\video_interpolation_backup\\soccer_25fps_1m30s.mxf --output_base_path=Z:\\AI_workspace\\video_interpolation_backup --fps=29.97 --ext=mxf
+        > python inference_v7.py --video=Z:\\AI_workspace\\video_interpolation_backup\\soccer_25fps_1m30s.mxf --output_base_path=Z:\\AI_workspace\\video_interpolation_backup --fps=29.97 --ext=mxf
     """
     parser = argparse.ArgumentParser(description='Interpolation for a pair of images')
     parser.add_argument('--video', dest='video', type=str, default=None)

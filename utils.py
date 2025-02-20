@@ -5,6 +5,7 @@ import _thread
 import numpy as np
 from PIL import Image
 from queue import Queue
+from logging import Logger
 from torch.nn import functional as F
 
 
@@ -74,13 +75,17 @@ def get_video_writer_using_av(video_path, fps, size, extension="mp4"):
 def read_image(path:str):
     return cv2.cvtColor(np.array(Image.open(path)), cv2.COLOR_BGR2RGB)
 
+def remove_images(image_dir:str, start_index:int, end_index:int):
+    for i in range(start_index, end_index):
+        os.remove(os.path.join(image_dir, f"{i:06d}.tga"))
+
 def clear_write_buffer(write_buffer:Queue, video_container:av.container.OutputContainer, video_stream:av.VideoStream, size:tuple[int, int]):
-    height, width = 0, 1
+    height, width = size[0], size[1]
     while True:
         item = np.ascontiguousarray(write_buffer.get())
         if item is None:
             break
-        frame = av.VideoFrame.from_ndarray(np.frombuffer(item, dtype=np.uint8).reshape(size[height], size[width], 3), format="rgb24")
+        frame = av.VideoFrame.from_ndarray(np.frombuffer(item, dtype=np.uint8).reshape(height, width, 3), format="rgb24")
         for packet in video_stream.encode(frame):
             video_container.mux(packet)
 
@@ -91,6 +96,13 @@ def build_read_buffer(read_buffer, videoCapture):
     except:
         pass
     read_buffer.put(None)
+
+def write_frame_with_av(interpolated_frame:np.ndarray, video_container:av.container.OutputContainer, video_stream:av.VideoStream, size:tuple[int, int]):
+    height, width = size[0], size[1]
+    item = np.ascontiguousarray(interpolated_frame)
+    frame = av.VideoFrame.from_ndarray(np.frombuffer(item, dtype=np.uint8).reshape(height, width, 3), format="rgb24")
+    for packet in video_stream.encode(frame):
+        video_container.mux(packet)
     
 def generate_buffer(frames:list[str], video_container:av.container.OutputContainer=None, video_stream:av.VideoStream=None, size:tuple[int, int]=None):
     read_buffer = Queue(maxsize=500)

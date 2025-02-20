@@ -106,13 +106,13 @@ def transferAudioWithFrames(sourceVideo:str, targetFrames:str, fps:float, bitrat
     # remove temp directory
     shutil.rmtree("temp")
 
-
-def interlaced_to_progressive_2x_frames(video_path:str, output_base_path:str, debug:bool=False) -> str:
+def get_output_frames_path(video_path:str, output_base_path:str):
     base_path, ext = os.path.splitext(os.path.basename(video_path))
     output_frames_path = os.path.join(output_base_path, base_path + "_p_2x")
-    if os.path.exists(output_frames_path):
-        return output_frames_path
-    os.mkdir(output_frames_path)
-    if debug: print(f'=> interlaced_to_progressive_2x: {video_path} -> {output_frames_path}')
-    os.system(f'ffmpeg -i {video_path} -vf "yadif=1" -frame_pts true {output_frames_path}/%6d.tga')
+    os.makedirs(output_frames_path, exist_ok=True, mode=0o777)
     return output_frames_path
+
+def interlaced_to_progressive_2x_frames(video_path:str, output_frames_path:str, debug:bool=False) -> None:
+    if debug: print(f'=> interlaced_to_progressive_2x: {video_path} -> {output_frames_path}')
+    command = f'ffmpeg -i {video_path} -vf "yadiif=1" -frame_pts true {output_frames_path}/%6d.tga'
+    os.system(command)
