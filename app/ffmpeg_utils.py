@@ -31,7 +31,6 @@ def transferAudio(sourceVideo, targetVideo, fps:float, output_ext:str, audio_str
     num_threads = mp.cpu_count() // 2
     audio_stream_mappings = [f"-map 1:a" for _ in range(audio_stream_count)]
     # combine audio file an d new video file (*.mp4)
-    output_path = base_path + "_output" + output_ext
     if output_ext.lower().endswith('mxf'):
         cli = [
             'ffmpeg -y',
@@ -51,16 +50,15 @@ def transferAudio(sourceVideo, targetVideo, fps:float, output_ext:str, audio_str
             f'-filter_complex "[0:v]fps=fps={FPS_MAPPING.get(fps * 2, fps * 2)},tinterlace=mode=interlacex2,setfield=tff[v]"',
             f'-map "[v]" {" ".join(audio_stream_mappings)}',
             f'-max_muxing_queue_size 1024 -sc_threshold 1000000000 -threads {num_threads}',
-            output_path
+            base_path + "_output" + output_ext
         ]
     
+    print(f"ffmpeg command line:\n{' '.join(cli)}")
     os.system(' '.join(cli))
     os.remove(targetNoAudio)
 
     # remove temp directory
     shutil.rmtree("temp")
-
-    return output_path
 
 @DeprecationWarning
 def transferAudioWithFrames(sourceVideo:str, targetFrames:str, fps:float, bitrate:str, output_ext:str):

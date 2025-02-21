@@ -5,6 +5,7 @@ import _thread
 import numpy as np
 from PIL import Image
 from queue import Queue
+from marshmallow import Schema
 from torch.nn import functional as F
 
 
@@ -112,3 +113,9 @@ def generate_buffer(frames:list[str], video_container:av.container.OutputContain
 
 def frame2image(frame):
     return cv2.cvtColor(frame.to_rgb().to_ndarray(), cv2.COLOR_RGB2BGR)
+
+def valid_or_return_request(request_json: dict, schema: Schema):
+    try:
+        return schema.load(request_json) # validate
+    except Exception as e:
+        raise e

@@ -1,0 +1,9 @@
+logging:
+  base_path: "/mnt/data/logs/192.168.1.211/"
+  max_bytes: 10485760
+  backup_count: 30
+
+RIFE:
+  checkpoint: "train_log"
+  temp_dir: "."
+  log_save_path: "rife_log"
